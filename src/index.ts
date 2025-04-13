@@ -1,0 +1,186 @@
+import express from 'express';
+import cors from 'cors';
+import { config } from 'dotenv';
+import { initializeApp, cert } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
+import Stripe from 'stripe';
+
+// Initialize environment variables
+config();
+
+// Initialize Firebase Admin
+const app = initializeApp({
+  credential: cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+  }),
+});
+
+export const db = getFirestore(app);
+export const auth = getAuth(app);
+
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2023-10-16',
+});
+
+// Initialize Express app
+const server = express();
+
+// Middleware
+server.use(cors());
+server.use(express.json());
+
+// Health check endpoint
+server.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Stripe webhook endpoint
+server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  try {
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      sig || '',
+      process.env.STRIPE_WEBHOOK_SECRET || ''
+    );
+
+    switch (event.type) {
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
+        
+        const usersSnapshot = await db.collection('users')
+          .where('stripeCustomerId', '==', customerId)
+          .limit(1)
+          .get();
+
+        if (usersSnapshot.empty) {
+          throw new Error('No user found for customer');
+        }
+
+        const userId = usersSnapshot.docs[0].id;
+        
+        await db.collection('users').doc(userId).update({
+          subscription: {
+            subscriptionId: subscription.id,
+            priceId: subscription.items.data[0].price.id,
+            status: subscription.status,
+            currentPeriodEnd: subscription.current_period_end,
+            cancelAtPeriodEnd: subscription.cancel_at_period_end,
+            trialEnd: subscription.trial_end,
+          },
+          plan: subscription.status === 'active' ? 'pro' : 'free',
+        });
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
+        
+        const usersSnapshot = await db.collection('users')
+          .where('stripeCustomerId', '==', customerId)
+          .limit(1)
+          .get();
+
+        if (!usersSnapshot.empty) {
+          const userId = usersSnapshot.docs[0].id;
+          await db.collection('users').doc(userId).update({
+            'subscription': null,
+            'plan': 'free',
+          });
+        }
+        break;
+      }
+    }
+
+    res.json({ received: true });
+  } catch (err) {
+    console.error('Webhook error:', err);
+    return res.status(400).json({ 
+      error: {
+        message: 'Webhook signature verification failed',
+        code: 'WEBHOOK_SIGNATURE_ERROR'
+      }
+    });
+  }
+});
+
+// Stripe checkout endpoint
+server.post('/api/stripe/create-checkout-session', async (req, res) => {
+  try {
+    const { userId, returnUrl } = req.body;
+
+    // Get or create customer
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userData = userDoc.data();
+    let customerId = userData?.stripeCustomerId;
+    
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        metadata: { userId },
+      });
+      customerId = customer.id;
+      await db.collection('users').doc(userId).update({
+        stripeCustomerId: customerId,
+      });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: process.env.STRIPE_PRO_PLAN_PRICE_ID,
+          quantity: 1,
+        },
+      ],
+      mode: 'subscription',
+      subscription_data: {
+        trial_period_days: 3,
+      },
+      success_url: `${returnUrl}?success=true`,
+      cancel_url: `${returnUrl}?canceled=true`,
+    });
+
+    return res.json({ sessionId: session.id });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    return res.status(500).json({ error: 'Failed to create checkout session' });
+  }
+});
+
+// Stripe portal endpoint
+server.post('/api/stripe/create-portal-session', async (req, res) => {
+  try {
+    const { customerId, returnUrl } = req.body;
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+
+    return res.json({ url: session.url });
+  } catch (error) {
+    console.error('Error creating portal session:', error);
+    return res.status(500).json({ error: 'Failed to create portal session' });
+  }
+});
+
+// Start server
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+});
