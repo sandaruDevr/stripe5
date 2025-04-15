@@ -205,7 +205,10 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       cancel_url: `${returnUrl}?canceled=true`,
     });
 
-    return res.json({ sessionId: session.id });
+   return res.json({ 
+  sessionId: session.id, 
+  url: session.url 
+});
   } catch (error) {
     console.error('Error creating checkout session:', error);
     return res.status(500).json({ error: 'Failed to create checkout session' });
