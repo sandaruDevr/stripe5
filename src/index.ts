@@ -66,22 +66,29 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
 
+        // Safely access priceId from subscription items
+        const priceId = subscription.items?.data?.[0]?.price?.id || '';
+
+        // Query users by stripeCustomerId using Realtime Database
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
           .equalTo(customerId)
           .once('value');
-
+        
         if (!snapshot.exists()) {
           throw new Error('No user found for customer');
         }
 
+        // Get the first user (there should only be one)
         const users = snapshot.val();
         const userId = Object.keys(users)[0];
         const userRef = usersRef.child(userId);
 
+        // Get current user data
         const currentUserData = (await userRef.once('value')).val();
-
+        
+        // Update user subscription data
         await userRef.update({
           uid: currentUserData.uid,
           displayName: currentUserData.displayName,
@@ -92,10 +99,10 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           dailySummaryCount: currentUserData.dailySummaryCount,
           dailySummaryResetTime: currentUserData.dailySummaryResetTime,
           plan: subscription.status === 'active' ? 'pro' : 'free',
-          stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id,
+          stripeCustomerId: customerId,
           subscription: {
             subscriptionId: subscription.id,
-            priceId: subscription.items.data[0].price.id,
+            priceId: priceId,  // Correctly add priceId
             status: subscription.status,
             currentPeriodEnd: subscription.current_period_end,
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
@@ -109,6 +116,7 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
 
+        // Query users by stripeCustomerId
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
@@ -119,9 +127,11 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           const users = snapshot.val();
           const userId = Object.keys(users)[0];
           const userRef = usersRef.child(userId);
-
+          
+          // Get current user data
           const currentUserData = (await userRef.once('value')).val();
-
+          
+          // Update user data, removing subscription
           await userRef.update({
             uid: currentUserData.uid,
             displayName: currentUserData.displayName,
@@ -150,6 +160,7 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
     });
   }
 });
+
 
 // Stripe checkout endpoint
 server.post('/api/stripe/create-checkout-session', async (req, res) => {
