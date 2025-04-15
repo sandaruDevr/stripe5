@@ -6,7 +6,7 @@ import { getDatabase } from 'firebase-admin/database';
 import { getAuth } from 'firebase-admin/auth';
 import Stripe from 'stripe';
 
-// Initialize environment variables 
+// Initialize environment variables
 config();
 
 // Initialize Firebase Admin
@@ -63,8 +63,8 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
     switch (event.type) {
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const subscription = event.data.object;
-        const customerId = subscription.customer;
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
 
         const usersRef = db.ref('users');
         const snapshot = await usersRef
@@ -83,8 +83,16 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         const currentUserData = (await userRef.once('value')).val();
 
         await userRef.update({
-          ...currentUserData,
+          uid: currentUserData.uid,
+          displayName: currentUserData.displayName,
+          email: currentUserData.email,
+          createdAt: currentUserData.createdAt,
+          lastLoginAt: currentUserData.lastLoginAt,
+          summaryCount: currentUserData.summaryCount,
+          dailySummaryCount: currentUserData.dailySummaryCount,
+          dailySummaryResetTime: currentUserData.dailySummaryResetTime,
           plan: subscription.status === 'active' ? 'pro' : 'free',
+          stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id,
           subscription: {
             subscriptionId: subscription.id,
             priceId: subscription.items.data[0].price.id,
@@ -98,8 +106,8 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
       }
 
       case 'customer.subscription.deleted': {
-        const subscription = event.data.object;
-        const customerId = subscription.customer;
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
 
         const usersRef = db.ref('users');
         const snapshot = await usersRef
@@ -115,7 +123,14 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           const currentUserData = (await userRef.once('value')).val();
 
           await userRef.update({
-            ...currentUserData,
+            uid: currentUserData.uid,
+            displayName: currentUserData.displayName,
+            email: currentUserData.email,
+            createdAt: currentUserData.createdAt,
+            lastLoginAt: currentUserData.lastLoginAt,
+            summaryCount: currentUserData.summaryCount,
+            dailySummaryCount: currentUserData.dailySummaryCount,
+            dailySummaryResetTime: currentUserData.dailySummaryResetTime,
             plan: 'free',
             subscription: null,
           });
@@ -136,13 +151,17 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
   }
 });
 
-// Create Checkout Session (redirect method)
+// Stripe checkout endpoint
 server.post('/api/stripe/create-checkout-session', async (req, res) => {
   try {
     const { userId, returnUrl } = req.body;
+
     const userRef = db.ref(`users/${userId}`);
     const snapshot = await userRef.once('value');
-    if (!snapshot.exists()) return res.status(404).json({ error: 'User not found' });
+
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     const userData = snapshot.val();
     let customerId = userData?.stripeCustomerId;
@@ -154,7 +173,10 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
         name: userData.displayName,
       });
       customerId = customer.id;
-      await userRef.update({ stripeCustomerId: customerId });
+
+      await userRef.update({
+        stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id,
+      });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -184,7 +206,24 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
   }
 });
 
-// Embedded checkout with Payment Intent
+// Stripe portal endpoint
+server.post('/api/stripe/create-portal-session', async (req, res) => {
+  try {
+    const { customerId, returnUrl } = req.body;
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+
+    return res.json({ url: session.url });
+  } catch (error) {
+    console.error('Error creating portal session:', error);
+    return res.status(500).json({ error: 'Failed to create portal session' });
+  }
+});
+
+// Stripe PaymentIntent for embedded form
 server.post('/api/stripe/create-payment-intent', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -203,18 +242,20 @@ server.post('/api/stripe/create-payment-intent', async (req, res) => {
         name: userData.displayName,
       });
       customerId = customer.id;
-      await userRef.update({ stripeCustomerId: customerId });
+
+      await userRef.update({ stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id });
     }
 
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
-      items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID }],
+      items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID! }],
       trial_period_days: 3,
       payment_behavior: 'default_incomplete',
       expand: ['latest_invoice.payment_intent'],
     });
 
-    const clientSecret = subscription.latest_invoice?.payment_intent?.client_secret;
+    const invoice = subscription.latest_invoice as Stripe.Invoice;
+    const clientSecret = (invoice.payment_intent as Stripe.PaymentIntent)?.client_secret;
 
     return res.json({
       clientSecret,
@@ -226,25 +267,9 @@ server.post('/api/stripe/create-payment-intent', async (req, res) => {
   }
 });
 
-// Stripe portal endpoint
-server.post('/api/stripe/create-portal-session', async (req, res) => {
-  try {
-    const { customerId, returnUrl } = req.body;
-
-    const session = await stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url: returnUrl,
-    });
-
-    return res.json({ url: session.url });
-  } catch (error) {
-    console.error('Error creating portal session:', error);
-    return res.status(500).json({ error: 'Failed to create portal session' });
-  }
-});
-
 // Start server
 const PORT = parseInt(process.env.PORT || '3000', 10);
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
