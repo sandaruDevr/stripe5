@@ -257,24 +257,23 @@ server.post('/api/stripe/create-payment-intent', async (req, res) => {
       await userRef.update({ stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id });
     }
 
-   const subscription = await stripe.subscriptions.create({
+  const subscription = await stripe.subscriptions.create({
   customer: customerId,
   items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID }],
   trial_period_days: 3,
   payment_behavior: 'default_incomplete',
-  expand: ['latest_invoice.payment_intent'],
+  expand: ['latest_invoice', 'latest_invoice.payment_intent'], 
 });
 
+console.log('Full subscription:', JSON.stringify(subscription, null, 2));
 
-const invoice = subscription.latest_invoice as Stripe.Invoice;
-const paymentIntent = invoice.payment_intent as Stripe.PaymentIntent;
-const clientSecret = paymentIntent.client_secret;
+const clientSecret = (subscription.latest_invoice as any)?.payment_intent?.client_secret;
 
+res.json({
+  clientSecret,
+  subscriptionId: subscription.id,
+});
 
-    return res.json({
-      clientSecret,
-      subscriptionId: subscription.id,
-    });
   } catch (error) {
     console.error('Error creating payment intent:', error);
     return res.status(500).json({ error: 'Failed to create payment intent' });
