@@ -257,16 +257,19 @@ server.post('/api/stripe/create-payment-intent', async (req, res) => {
       await userRef.update({ stripeCustomerId: typeof customerId === 'string' ? customerId : customerId?.id });
     }
 
-    const subscription = await stripe.subscriptions.create({
-      customer: customerId,
-      items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID! }],
-      trial_period_days: 3,
-      payment_behavior: 'default_incomplete',
-      expand: ['latest_invoice.payment_intent'],
-    });
+   const subscription = await stripe.subscriptions.create({
+  customer: customerId,
+  items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID }],
+  trial_period_days: 3,
+  payment_behavior: 'default_incomplete',
+  expand: ['latest_invoice.payment_intent'],
+});
 
-    const invoice = subscription.latest_invoice as Stripe.Invoice;
-    const clientSecret = (invoice.payment_intent as Stripe.PaymentIntent)?.client_secret;
+
+const invoice = subscription.latest_invoice as Stripe.Invoice;
+const paymentIntent = invoice.payment_intent as Stripe.PaymentIntent;
+const clientSecret = paymentIntent.client_secret;
+
 
     return res.json({
       clientSecret,
