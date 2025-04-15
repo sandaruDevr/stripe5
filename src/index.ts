@@ -13,7 +13,7 @@ config();
 const app = initializeApp({
   credential: cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\n/g, '\n'),
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
   }),
   databaseURL: 'https://summarygg-a222d-default-rtdb.firebaseio.com',
@@ -63,40 +63,28 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
     switch (event.type) {
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId = subscription.customer as string;
-        
-        // Query users by stripeCustomerId using Realtime Database
+        const subscription = event.data.object;
+        const customerId = subscription.customer;
+
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
           .equalTo(customerId)
           .once('value');
-        
+
         if (!snapshot.exists()) {
           throw new Error('No user found for customer');
         }
 
-        // Get the first user (there should only be one)
         const users = snapshot.val();
         const userId = Object.keys(users)[0];
         const userRef = usersRef.child(userId);
-        
-        // Get current user data
+
         const currentUserData = (await userRef.once('value')).val();
-        
-        // Update user subscription data
+
         await userRef.update({
-          uid: currentUserData.uid,
-          displayName: currentUserData.displayName,
-          email: currentUserData.email,
-          createdAt: currentUserData.createdAt,
-          lastLoginAt: currentUserData.lastLoginAt,
-          summaryCount: currentUserData.summaryCount,
-          dailySummaryCount: currentUserData.dailySummaryCount,
-          dailySummaryResetTime: currentUserData.dailySummaryResetTime,
+          ...currentUserData,
           plan: subscription.status === 'active' ? 'pro' : 'free',
-          stripeCustomerId: customerId,
           subscription: {
             subscriptionId: subscription.id,
             priceId: subscription.items.data[0].price.id,
@@ -110,10 +98,9 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
       }
 
       case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId = subscription.customer as string;
-        
-        // Query users by stripeCustomerId
+        const subscription = event.data.object;
+        const customerId = subscription.customer;
+
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
@@ -124,20 +111,11 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           const users = snapshot.val();
           const userId = Object.keys(users)[0];
           const userRef = usersRef.child(userId);
-          
-          // Get current user data
+
           const currentUserData = (await userRef.once('value')).val();
-          
-          // Update user data, removing subscription
+
           await userRef.update({
-            uid: currentUserData.uid,
-            displayName: currentUserData.displayName,
-            email: currentUserData.email,
-            createdAt: currentUserData.createdAt,
-            lastLoginAt: currentUserData.lastLoginAt,
-            summaryCount: currentUserData.summaryCount,
-            dailySummaryCount: currentUserData.dailySummaryCount,
-            dailySummaryResetTime: currentUserData.dailySummaryResetTime,
+            ...currentUserData,
             plan: 'free',
             subscription: null,
           });
@@ -158,22 +136,17 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
   }
 });
 
-// Stripe checkout endpoint
+// Create Checkout Session (redirect method)
 server.post('/api/stripe/create-checkout-session', async (req, res) => {
   try {
     const { userId, returnUrl } = req.body;
-
-    // Get user data from Realtime Database
     const userRef = db.ref(`users/${userId}`);
     const snapshot = await userRef.once('value');
-    
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
+    if (!snapshot.exists()) return res.status(404).json({ error: 'User not found' });
+
     const userData = snapshot.val();
     let customerId = userData?.stripeCustomerId;
-    
+
     if (!customerId) {
       const customer = await stripe.customers.create({
         metadata: { userId },
@@ -181,11 +154,7 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
         name: userData.displayName,
       });
       customerId = customer.id;
-      
-      // Update user with Stripe customer ID
-      await userRef.update({
-        stripeCustomerId: customerId,
-      });
+      await userRef.update({ stripeCustomerId: customerId });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -205,13 +174,55 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       cancel_url: `${returnUrl}?canceled=true`,
     });
 
-   return res.json({ 
-  sessionId: session.id, 
-  url: session.url 
-});
+    return res.json({ 
+      sessionId: session.id, 
+      url: session.url 
+    });
   } catch (error) {
     console.error('Error creating checkout session:', error);
     return res.status(500).json({ error: 'Failed to create checkout session' });
+  }
+});
+
+// Embedded checkout with Payment Intent
+server.post('/api/stripe/create-payment-intent', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    const userRef = db.ref(`users/${userId}`);
+    const snapshot = await userRef.once('value');
+    if (!snapshot.exists()) return res.status(404).json({ error: 'User not found' });
+
+    const userData = snapshot.val();
+    let customerId = userData?.stripeCustomerId;
+
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        metadata: { userId },
+        email: userData.email,
+        name: userData.displayName,
+      });
+      customerId = customer.id;
+      await userRef.update({ stripeCustomerId: customerId });
+    }
+
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: process.env.STRIPE_PRO_PLAN_PRICE_ID }],
+      trial_period_days: 3,
+      payment_behavior: 'default_incomplete',
+      expand: ['latest_invoice.payment_intent'],
+    });
+
+    const clientSecret = subscription.latest_invoice?.payment_intent?.client_secret;
+
+    return res.json({
+      clientSecret,
+      subscriptionId: subscription.id,
+    });
+  } catch (error) {
+    console.error('Error creating payment intent:', error);
+    return res.status(500).json({ error: 'Failed to create payment intent' });
   }
 });
 
@@ -234,7 +245,6 @@ server.post('/api/stripe/create-portal-session', async (req, res) => {
 
 // Start server
 const PORT = parseInt(process.env.PORT || '3000', 10);
-
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
