@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { config } from 'dotenv';
 import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getDatabase } from 'firebase-admin/database';
 import { getAuth } from 'firebase-admin/auth';
 import Stripe from 'stripe';
 
@@ -16,10 +16,21 @@ const app = initializeApp({
     privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
   }),
+  databaseURL: 'https://summarygg-a222d-default-rtdb.firebaseio.com',
 });
 
-export const db = getFirestore(app);
+// Initialize Firebase services
+export const db = getDatabase(app);
 export const auth = getAuth(app);
+
+// Verify Realtime Database connection
+const dbRef = db.ref('server_status');
+dbRef.set({
+  lastStartup: new Date().toISOString(),
+  status: 'online'
+})
+.then(() => console.log('✅ Successfully connected to Realtime Database'))
+.catch(error => console.error('❌ Error connecting to Realtime Database:', error));
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
@@ -55,18 +66,37 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
         
-        const usersSnapshot = await db.collection('users')
-          .where('stripeCustomerId', '==', customerId)
-          .limit(1)
-          .get();
-
-        if (usersSnapshot.empty) {
+        // Query users by stripeCustomerId using Realtime Database
+        const usersRef = db.ref('users');
+        const snapshot = await usersRef
+          .orderByChild('stripeCustomerId')
+          .equalTo(customerId)
+          .once('value');
+        
+        if (!snapshot.exists()) {
           throw new Error('No user found for customer');
         }
 
-        const userId = usersSnapshot.docs[0].id;
+        // Get the first user (there should only be one)
+        const users = snapshot.val();
+        const userId = Object.keys(users)[0];
+        const userRef = usersRef.child(userId);
         
-        await db.collection('users').doc(userId).update({
+        // Get current user data
+        const currentUserData = (await userRef.once('value')).val();
+        
+        // Update user subscription data
+        await userRef.update({
+          uid: currentUserData.uid,
+          displayName: currentUserData.displayName,
+          email: currentUserData.email,
+          createdAt: currentUserData.createdAt,
+          lastLoginAt: currentUserData.lastLoginAt,
+          summaryCount: currentUserData.summaryCount,
+          dailySummaryCount: currentUserData.dailySummaryCount,
+          dailySummaryResetTime: currentUserData.dailySummaryResetTime,
+          plan: subscription.status === 'active' ? 'pro' : 'free',
+          stripeCustomerId: customerId,
           subscription: {
             subscriptionId: subscription.id,
             priceId: subscription.items.data[0].price.id,
@@ -75,7 +105,6 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
             trialEnd: subscription.trial_end,
           },
-          plan: subscription.status === 'active' ? 'pro' : 'free',
         });
         break;
       }
@@ -84,16 +113,33 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
         
-        const usersSnapshot = await db.collection('users')
-          .where('stripeCustomerId', '==', customerId)
-          .limit(1)
-          .get();
+        // Query users by stripeCustomerId
+        const usersRef = db.ref('users');
+        const snapshot = await usersRef
+          .orderByChild('stripeCustomerId')
+          .equalTo(customerId)
+          .once('value');
 
-        if (!usersSnapshot.empty) {
-          const userId = usersSnapshot.docs[0].id;
-          await db.collection('users').doc(userId).update({
-            'subscription': null,
-            'plan': 'free',
+        if (snapshot.exists()) {
+          const users = snapshot.val();
+          const userId = Object.keys(users)[0];
+          const userRef = usersRef.child(userId);
+          
+          // Get current user data
+          const currentUserData = (await userRef.once('value')).val();
+          
+          // Update user data, removing subscription
+          await userRef.update({
+            uid: currentUserData.uid,
+            displayName: currentUserData.displayName,
+            email: currentUserData.email,
+            createdAt: currentUserData.createdAt,
+            lastLoginAt: currentUserData.lastLoginAt,
+            summaryCount: currentUserData.summaryCount,
+            dailySummaryCount: currentUserData.dailySummaryCount,
+            dailySummaryResetTime: currentUserData.dailySummaryResetTime,
+            plan: 'free',
+            subscription: null,
           });
         }
         break;
@@ -117,22 +163,27 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
   try {
     const { userId, returnUrl } = req.body;
 
-    // Get or create customer
-    const userDoc = await db.collection('users').doc(userId).get();
+    // Get user data from Realtime Database
+    const userRef = db.ref(`users/${userId}`);
+    const snapshot = await userRef.once('value');
     
-    if (!userDoc.exists) {
+    if (!snapshot.exists()) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    const userData = userDoc.data();
+    const userData = snapshot.val();
     let customerId = userData?.stripeCustomerId;
     
     if (!customerId) {
       const customer = await stripe.customers.create({
         metadata: { userId },
+        email: userData.email,
+        name: userData.displayName,
       });
       customerId = customer.id;
-      await db.collection('users').doc(userId).update({
+      
+      // Update user with Stripe customer ID
+      await userRef.update({
         stripeCustomerId: customerId,
       });
     }
