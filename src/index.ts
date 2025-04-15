@@ -6,7 +6,7 @@ import { getDatabase } from 'firebase-admin/database';
 import { getAuth } from 'firebase-admin/auth';
 import Stripe from 'stripe';
 
-// Initialize environment variables
+// Initialize environment variables 
 config();
 
 // Initialize Firebase Admin
