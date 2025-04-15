@@ -13,7 +13,8 @@
     "express": "^4.18.3",
     "firebase-admin": "^12.0.0",
     "stripe": "^14.19.0",
-    "node": "^20.17.30"
+    "@types/node": "^20.17.30",
+    "@types/cors": "^2.8.17"
   },
   "devDependencies": {
     "@types/node": "^20.17.30",
