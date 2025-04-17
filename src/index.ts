@@ -95,7 +95,7 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           summaryCount: currentUserData.summaryCount,
           dailySummaryCount: currentUserData.dailySummaryCount,
           dailySummaryResetTime: currentUserData.dailySummaryResetTime,
-          plan: subscription.status === 'active' ? 'pro' : 'free',
+          plan: subscription.status === 'active' || subscription.status === 'trialing' ? 'pro' : 'free',
           stripeCustomerId: customerId,
           subscription: {
             subscriptionId: subscription.id,
@@ -106,6 +106,8 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
             trialEnd: subscription.trial_end,
           },
         });
+
+        console.log(`✅ Updated subscription for user ${userId}`);
         break;
       }
 
@@ -141,6 +143,8 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
             plan: 'free',
             subscription: null,
           });
+
+          console.log(`✅ Removed subscription for user ${userId}`);
         }
         break;
       }
@@ -186,6 +190,8 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       await userRef.update({
         stripeCustomerId: customerId,
       });
+
+      console.log(`✅ Created Stripe customer for user ${userId}`);
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -205,10 +211,11 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       cancel_url: `${returnUrl}?canceled=true`,
     });
 
-   return res.json({ 
-  sessionId: session.id, 
-  url: session.url 
-});
+    console.log(`✅ Created checkout session for user ${userId}`);
+    return res.json({ 
+      sessionId: session.id, 
+      url: session.url 
+    });
   } catch (error) {
     console.error('Error creating checkout session:', error);
     return res.status(500).json({ error: error });
@@ -225,6 +232,7 @@ server.post('/api/stripe/create-portal-session', async (req, res) => {
       return_url: returnUrl,
     });
 
+    console.log(`✅ Created portal session for customer ${customerId}`);
     return res.json({ url: session.url });
   } catch (error) {
     console.error('Error creating portal session:', error);
