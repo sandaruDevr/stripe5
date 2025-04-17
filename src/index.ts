@@ -196,9 +196,6 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
   }
 });
 
-
-});
-
 // After Stripe webhook route — this is safe for all other routes
 server.use(express.json());
 
