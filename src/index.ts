@@ -152,14 +152,15 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
 
     res.json({ received: true });
   } catch (err) {
-    console.error('Webhook error:', err);
-    return res.status(400).json({ 
-      error: {
-        message: 'Webhook signature verification failed',
-        code: 'WEBHOOK_SIGNATURE_ERROR'
-      }
-    });
-  }
+  console.error('Webhook error:', err);
+  return res.status(400).json({
+    error: {
+      message: err.message || 'Webhook signature verification failed', // Show the error message if available
+      code: 'WEBHOOK_SIGNATURE_ERROR',
+      stack: err.stack || '', // Optionally include the stack trace
+    },
+  });
+}
 });
 
 // Stripe checkout endpoint
