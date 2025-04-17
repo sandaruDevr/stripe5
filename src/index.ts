@@ -211,7 +211,7 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
 });
   } catch (error) {
     console.error('Error creating checkout session:', error);
-    return res.status(500).json({ error: 'Failed to create checkout session' });
+    return res.status(500).json({ error: error });
   }
 });
 
