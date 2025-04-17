@@ -42,7 +42,7 @@ const server = express();
 
 // Middleware
 server.use(cors());
-server.use(express.json());
+
 
 // Health check endpoint
 server.get('/health', (req, res) => {
@@ -175,6 +175,9 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
 }
 
 });
+
+// After Stripe webhook route — this is safe for all other routes
+server.use(express.json());
 
 // Stripe checkout endpoint
 server.post('/api/stripe/create-checkout-session', async (req, res) => {
