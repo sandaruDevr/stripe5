@@ -151,16 +151,29 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
     }
 
     res.json({ received: true });
-  } catch (err) {
-  console.error('Webhook error:', err);
-  return res.status(400).json({
-    error: {
-      message: err.message || 'Webhook signature verification failed', // Show the error message if available
-      code: 'WEBHOOK_SIGNATURE_ERROR',
-      stack: err.stack || '', // Optionally include the stack trace
-    },
-  });
+  } catch (err: unknown) {
+  // Narrow the type of 'err' to 'Error'
+  if (err instanceof Error) {
+    console.error('Webhook error:', err);
+    return res.status(400).json({
+      error: {
+        message: err.message || 'Webhook signature verification failed',
+        code: 'WEBHOOK_SIGNATURE_ERROR',
+        stack: err.stack || '',
+      },
+    });
+  } else {
+    // Handle case where 'err' is not an instance of Error (shouldn't normally happen)
+    console.error('Unknown error:', err);
+    return res.status(400).json({
+      error: {
+        message: 'Unknown error occurred',
+        code: 'WEBHOOK_SIGNATURE_ERROR',
+      },
+    });
+  }
 }
+
 });
 
 // Stripe checkout endpoint
