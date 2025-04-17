@@ -65,27 +65,23 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
-        
-        // Query users by stripeCustomerId using Realtime Database
+
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
           .equalTo(customerId)
           .once('value');
-        
+
         if (!snapshot.exists()) {
           throw new Error('No user found for customer');
         }
 
-        // Get the first user (there should only be one)
         const users = snapshot.val();
         const userId = Object.keys(users)[0];
         const userRef = usersRef.child(userId);
-        
-        // Get current user data
+
         const currentUserData = (await userRef.once('value')).val();
-        
-        // Update user subscription data
+
         await userRef.update({
           uid: currentUserData.uid,
           displayName: currentUserData.displayName,
@@ -114,8 +110,7 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
-        
-        // Query users by stripeCustomerId
+
         const usersRef = db.ref('users');
         const snapshot = await usersRef
           .orderByChild('stripeCustomerId')
@@ -126,11 +121,9 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
           const users = snapshot.val();
           const userId = Object.keys(users)[0];
           const userRef = usersRef.child(userId);
-          
-          // Get current user data
+
           const currentUserData = (await userRef.once('value')).val();
-          
-          // Update user data, removing subscription
+
           await userRef.update({
             uid: currentUserData.uid,
             displayName: currentUserData.displayName,
@@ -148,31 +141,61 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         }
         break;
       }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+
+        if (invoice.billing_reason === 'subscription_create') {
+          const customerId = invoice.customer as string;
+
+          const usersRef = db.ref('users');
+          const snapshot = await usersRef
+            .orderByChild('stripeCustomerId')
+            .equalTo(customerId)
+            .once('value');
+
+          if (snapshot.exists()) {
+            const users = snapshot.val();
+            const userId = Object.keys(users)[0];
+            const userRef = usersRef.child(userId);
+            const currentUserData = (await userRef.once('value')).val();
+
+            await userRef.update({
+              ...currentUserData,
+              plan: 'free',
+              subscription: null,
+            });
+
+            console.log(`⚠️ Trial payment failed. Downgraded user ${userId} to free plan.`);
+          }
+        }
+        break;
+      }
     }
 
     res.json({ received: true });
   } catch (err: unknown) {
-  // Narrow the type of 'err' to 'Error'
-  if (err instanceof Error) {
-    console.error('Webhook error:', err);
-    return res.status(400).json({
-      error: {
-        message: err.message || 'Webhook signature verification failed',
-        code: 'WEBHOOK_SIGNATURE_ERROR',
-        stack: err.stack || '',
-      },
-    });
-  } else {
-    // Handle case where 'err' is not an instance of Error (shouldn't normally happen)
-    console.error('Unknown error:', err);
-    return res.status(400).json({
-      error: {
-        message: 'Unknown error occurred',
-        code: 'WEBHOOK_SIGNATURE_ERROR',
-      },
-    });
+    if (err instanceof Error) {
+      console.error('Webhook error:', err);
+      return res.status(400).json({
+        error: {
+          message: err.message || 'Webhook signature verification failed',
+          code: 'WEBHOOK_SIGNATURE_ERROR',
+          stack: err.stack || '',
+        },
+      });
+    } else {
+      console.error('Unknown error:', err);
+      return res.status(400).json({
+        error: {
+          message: 'Unknown error occurred',
+          code: 'WEBHOOK_SIGNATURE_ERROR',
+        },
+      });
+    }
   }
-}
+});
+
 
 });
 
