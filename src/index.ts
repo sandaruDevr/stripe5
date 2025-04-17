@@ -242,7 +242,7 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       ],
       mode: 'subscription',
       subscription_data: {
-        trial_period_days: 3,
+        trial_period_days: 0,
       },
       success_url: `${returnUrl}?success=true`,
       cancel_url: `${returnUrl}?canceled=true`,
