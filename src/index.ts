@@ -288,7 +288,7 @@ server.post('/api/stripe/create-checkout-session', async (req, res) => {
       subscription_data: {
         trial_period_days: 1,
       },
-      success_url: `${returnUrl}?success=true`,
+      success_url: `https://silly-cat-6ba5b6.netlify.app`,
       cancel_url: `${returnUrl}?canceled=true`,
     });
 
