@@ -162,18 +162,26 @@ case 'invoice.paid': {
   const userId = Object.keys(users)[0];
   const userRef = usersRef.child(userId);
 
-  // Prepare the invoice data
-  const invoiceData = {
-    status: invoice.status,
-    currency: invoice.currency,
-    amountPaid: invoice.amount_paid,
-    hostedInvoiceUrl: invoice.hosted_invoice_url,
-    invoicePdf: invoice.invoice_pdf,
-    created: invoice.created,
-  };
+ const userInvoicesRef = userRef.child('invoices');
+const invoiceData = {
+  status: invoice.status,
+  currency: invoice.currency,
+  amountPaid: invoice.amount_paid,
+  hostedInvoiceUrl: invoice.hosted_invoice_url,
+  invoicePdf: invoice.invoice_pdf,
+  created: invoice.created,
+};
 
-  // Save invoice under the user's invoices
-  await userRef.child('invoices').child(invoice.id).set(invoiceData);
+await userInvoicesRef.child(invoice.id).set(invoiceData);
+
+ try {
+    // Save invoice under the user's invoices
+    await userRef.child('invoices').child(invoice.id).set(invoiceData);
+    console.log(`✅ Stored invoice ${invoice.id} under user ${userId}`);
+  } catch (error) {
+    console.error('❌ Error saving invoice data:', error);
+  }
+
   break;
 }
 
