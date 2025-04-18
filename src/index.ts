@@ -142,6 +142,42 @@ server.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async
         break;
       }
 
+case 'invoice.paid': {
+  const invoice = event.data.object as Stripe.Invoice;
+  const customerId = invoice.customer as string;
+
+  // Find user by Stripe customer ID
+  const usersRef = db.ref('users');
+  const snapshot = await usersRef
+    .orderByChild('stripeCustomerId')
+    .equalTo(customerId)
+    .once('value');
+
+  if (!snapshot.exists()) {
+    console.warn('⚠️ No user found for Stripe customer ID:', customerId);
+    break;
+  }
+
+  const users = snapshot.val();
+  const userId = Object.keys(users)[0];
+  const userRef = usersRef.child(userId);
+
+  // Prepare the invoice data
+  const invoiceData = {
+    status: invoice.status,
+    currency: invoice.currency,
+    amountPaid: invoice.amount_paid,
+    hostedInvoiceUrl: invoice.hosted_invoice_url,
+    invoicePdf: invoice.invoice_pdf,
+    created: invoice.created,
+  };
+
+  // Save invoice under the user's invoices
+  await userRef.child('invoices').child(invoice.id).set(invoiceData);
+  break;
+}
+
+        
       case 'invoice.payment_failed': {
         const invoice = event.data.object as Stripe.Invoice;
 
