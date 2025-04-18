@@ -180,6 +180,7 @@ await userInvoicesRef.child(invoice.id).set(invoiceData);
     console.log(`✅ Stored invoice ${invoice.id} under user ${userId}`);
   } catch (error) {
     console.error('❌ Error saving invoice data:', error);
+   console.log(`Error : `, error);
   }
 
   break;
